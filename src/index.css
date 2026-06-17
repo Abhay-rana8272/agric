@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --color-agri-dark: #2b3a30;
+  --color-agri-deep: #1b3322;
+  --color-agri-lime: #c2dd74;
+  --color-agri-lime-alt: #bad15a;
+  --color-agri-cream: #f7f6ee;
+  --color-agri-cream-dark: #f2efe4;
+  --color-agri-cream-border: #e2e1d7;
+  --color-agri-brown: #4e2b15;
+  --color-agri-charcoal: #2a2a2a;
+  --color-agri-green-mid: #6c8c3e;
+  --color-agri-red-accent: #9c392c;
+  --color-agri-gold: #e0b031;
+  --color-agri-green-stat: #369654;
+  
+  --font-display: "Outfit", sans-serif;
+}
+
+/* Custom Scrollbar Hide */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: pageFadeIn 0.4s ease forwards;
+}

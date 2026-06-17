@@ -1,0 +1,6 @@
+{
+  "name": "Agriic",
+  "description": "Science-Led Plant Nutrition Solution: Take our Soil Test™ to unlock your soil's hidden potential with customized nutrient kits.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
