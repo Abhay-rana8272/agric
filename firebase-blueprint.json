@@ -1,0 +1,143 @@
+{
+  "projectInfo": {
+    "name": "Agriic Admin Dashboard Service Backend",
+    "createdAt": "2026-06-17T11:10:00Z"
+  },
+  "collections": {
+    "users": {
+      "schema": {
+        "uid": "string",
+        "name": "string",
+        "email": "string",
+        "phone": "string",
+        "role": "Super Admin | Agronomist | Farmer",
+        "location": "string",
+        "cropType": "string",
+        "landSize": "string",
+        "joinedAt": "timestamp",
+        "status": "Active | Suspended"
+      },
+      "indexes": [
+        {
+          "fields": ["role", "joinedAt"],
+          "order": "descending"
+        }
+      ]
+    },
+    "soilReports": {
+      "schema": {
+        "id": "string",
+        "farmerId": "string",
+        "farmerName": "string",
+        "farmName": "string",
+        "pH": "number",
+        "nitrogen": "number",
+        "phosphorus": "number",
+        "potassium": "number",
+        "moisture": "number",
+        "status": "Pending | Reviewed",
+        "actionTaken": "string",
+        "cropType": "string",
+        "uploadDate": "timestamp"
+      }
+    },
+    "nutritionPlans": {
+      "schema": {
+        "id": "string",
+        "farmerId": "string",
+        "farmerName": "string",
+        "cropType": "string",
+        "title": "string",
+        "durationWeeks": "number",
+        "pHRange": "string",
+        "ingredients": "array (string)",
+        "frequency": "string",
+        "stages": "array (object)",
+        "createdAt": "timestamp"
+      }
+    },
+    "products": {
+      "schema": {
+        "id": "string",
+        "name": "string",
+        "category": "string",
+        "price": "number",
+        "stock": "number",
+        "lowStockLimit": "number",
+        "desc": "string",
+        "img": "string"
+      }
+    },
+    "orders": {
+      "schema": {
+        "id": "string",
+        "farmerId": "string",
+        "farmerName": "string",
+        "items": "array (object)",
+        "total": "number",
+        "status": "Processing | In-Transit | Delivered",
+        "paymentMethod": "card | upi | cod",
+        "address": "string",
+        "date": "string",
+        "createdAt": "timestamp"
+      }
+    },
+    "consultations": {
+      "schema": {
+        "id": "string",
+        "farmerId": "string",
+        "farmerName": "string",
+        "agronomistId": "string",
+        "agronomistName": "string",
+        "date": "string",
+        "timeSlot": "string",
+        "notes": "string",
+        "status": "Scheduled | Completed",
+        "npsScore": "number"
+      }
+    },
+    "content": {
+      "schema": {
+        "id": "string",
+        "title": "string",
+        "type": "article | video",
+        "category": "string",
+        "contentBody": "string",
+        "videoUrl": "string",
+        "publishedAt": "timestamp",
+        "targetPushSent": "boolean"
+      }
+    },
+    "supportTickets": {
+      "schema": {
+        "id": "string",
+        "farmerName": "string",
+        "subject": "string",
+        "priority": "Low | Medium | High",
+        "status": "Open | In-Progress | Solved",
+        "slaHours": "number",
+        "createdAt": "timestamp",
+        "messages": "array (object)",
+        "internalNotes": "array (object)"
+      }
+    },
+    "activities": {
+      "schema": {
+        "id": "string",
+        "message": "string",
+        "type": "order | user | report | support",
+        "timestamp": "timestamp"
+      }
+    },
+    "settings": {
+      "schema": {
+        "id": "string",
+        "primaryBrandName": "string",
+        "enableSMS": "boolean",
+        "enablePayments": "boolean",
+        "enableWeather": "boolean",
+        "twoFactorEnabled": "boolean"
+      }
+    }
+  }
+}

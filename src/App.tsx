@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Leaf, 
   ShoppingCart, 
@@ -29,9 +29,51 @@ import {
   ChevronDown,
   Package,
   Truck,
-  CreditCard
+  CreditCard,
+  Camera,
+  Mail
 } from 'lucide-react';
 import { PRODUCTS, BLOG_POSTS, TESTIMONIALS, INGREDIENTS, GOOGLE_REVIEWS, EXPECTATIONS_LIST, QUIZ_QUESTIONS, Product, MOCK_ORDERS, Order } from './data';
+
+import { 
+  db, 
+  auth, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot
+} from "./lib/firebase";
+import { seedDatabaseIfEmpty } from "./initialData";
+import { HomeModule } from "./components/HomeModule";
+import { FarmersModule } from "./components/FarmersModule";
+import { SoilModule } from "./components/SoilModule";
+import { NutritionModule } from "./components/NutritionModule";
+import { ProductsModule } from "./components/ProductsModule";
+import { AnalyticsModule } from "./components/AnalyticsModule";
+import { ConsultationsModule } from "./components/ConsultationsModule";
+import { ContentModule } from "./components/ContentModule";
+import { SupportModule } from "./components/SupportModule";
+import { SettingsModule } from "./components/SettingsModule";
+import { 
+  Farmer, 
+  SoilReport, 
+  DeficiencyAlertRule, 
+  NutritionPlan, 
+  SupportTicket, 
+  DashboardActivity,
+  WorkspaceSettings,
+  Consultation,
+  ContentItem,
+  UserRole
+} from "./types";
 
 // Custom router helper
 const getHashParams = (hashStr: string) => {
@@ -50,6 +92,502 @@ const getHashParams = (hashStr: string) => {
 
 export default function App() {
   const [hash, setHash] = useState(window.location.hash || '#home');
+
+  // ==========================================
+  // DYNAMIC ADMIN STATE & DATABASE CONTROLS
+  // ==========================================
+  const [adminActiveTab, setAdminActiveTab] = useState<string>('home');
+  const [liveFarmers, setLiveFarmers] = useState<Farmer[]>([]);
+  const [liveSoilReports, setLiveSoilReports] = useState<SoilReport[]>([]);
+  const [liveOrders, setLiveOrders] = useState<Order[]>([]);
+  const [liveAlertRules, setLiveAlertRules] = useState<DeficiencyAlertRule[]>([]);
+  const [liveNutritionPlans, setLiveNutritionPlans] = useState<NutritionPlan[]>([]);
+  const [liveProducts, setLiveProducts] = useState<Product[]>([]);
+  const [liveConsultations, setLiveConsultations] = useState<Consultation[]>([]);
+  const [liveContent, setLiveContent] = useState<ContentItem[]>([]);
+  const [liveTickets, setLiveTickets] = useState<SupportTicket[]>([]);
+  const [liveActivities, setLiveActivities] = useState<DashboardActivity[]>([]);
+  const [liveSettings, setLiveSettings] = useState<WorkspaceSettings | null>(null);
+  
+  const [adminUser, setAdminUser] = useState<{ email: string; name: string; role: UserRole; uid?: string } | null>(() => {
+    try {
+      const saved = localStorage.getItem('agriic_admin_session');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Automated first-run seed trigger
+  useEffect(() => {
+    seedDatabaseIfEmpty();
+  }, []);
+
+  // Sync state machine on Firebase Auth changes
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        let assignedRole: UserRole = 'Farmer';
+        if (user.email === 'abhayrana8272@gmail.com' || user.email?.endsWith('@agriic.com')) {
+          assignedRole = 'Super Admin';
+        } else {
+          assignedRole = 'Agronomist';
+        }
+        const session = {
+          email: user.email || '',
+          name: user.displayName || 'Google Specialist',
+          role: assignedRole,
+          uid: user.uid
+        };
+        setAdminUser(session);
+        localStorage.setItem('agriic_admin_session', JSON.stringify(session));
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Live Snapshot synchronizers
+  useEffect(() => {
+    if (!adminUser) return;
+
+    const u1 = onSnapshot(collection(db, "users"), (snapshot) => {
+      const fList: Farmer[] = [];
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        fList.push({
+          id: doc.id,
+          name: d.name || 'Anonymous Grower',
+          email: d.email || '',
+          phone: d.phone || '',
+          role: d.role || 'Farmer',
+          location: d.location || '',
+          cropFocus: d.cropFocus || '',
+          landSize: d.landSize || '',
+          status: d.status || 'Active',
+          joinedAt: d.joinedAt || new Date().toISOString()
+        });
+      });
+      setLiveFarmers(fList);
+    }, (err) => handleLiveSyncError(err, 'list', 'users'));
+
+    const u2 = onSnapshot(collection(db, "soilReports"), (snapshot) => {
+      const sList: SoilReport[] = [];
+      snapshot.forEach(doc => {
+        sList.push({ id: doc.id, ...doc.data() } as SoilReport);
+      });
+      setLiveSoilReports(sList);
+    }, (err) => handleLiveSyncError(err, 'list', 'soilReports'));
+
+    const u3 = onSnapshot(collection(db, "orders"), (snapshot) => {
+      const oList: Order[] = [];
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        oList.push({ id: doc.id, ...d } as Order);
+      });
+      setLiveOrders(oList);
+    }, (err) => handleLiveSyncError(err, 'list', 'orders'));
+
+    const u4 = onSnapshot(collection(db, "deficiencyRules"), (snapshot) => {
+      const rList: DeficiencyAlertRule[] = [];
+      snapshot.forEach(doc => {
+        rList.push({ id: doc.id, ...doc.data() } as DeficiencyAlertRule);
+      });
+      setLiveAlertRules(rList);
+    }, (err) => handleLiveSyncError(err, 'list', 'deficiencyRules'));
+
+    const u5 = onSnapshot(collection(db, "nutritionPlans"), (snapshot) => {
+      const pList: NutritionPlan[] = [];
+      snapshot.forEach(doc => {
+        pList.push({ id: doc.id, ...doc.data() } as NutritionPlan);
+      });
+      setLiveNutritionPlans(pList);
+    }, (err) => handleLiveSyncError(err, 'list', 'nutritionPlans'));
+
+    const u6 = onSnapshot(collection(db, "products"), (snapshot) => {
+      const prList: Product[] = [];
+      snapshot.forEach(doc => {
+        prList.push({ id: doc.id, ...doc.data() } as Product);
+      });
+      setLiveProducts(prList);
+    }, (err) => handleLiveSyncError(err, 'list', 'products'));
+
+    const u7 = onSnapshot(collection(db, "consultations"), (snapshot) => {
+      const cList: Consultation[] = [];
+      snapshot.forEach(doc => {
+        cList.push({ id: doc.id, ...doc.data() } as Consultation);
+      });
+      setLiveConsultations(cList);
+    }, (err) => handleLiveSyncError(err, 'list', 'consultations'));
+
+    const u8 = onSnapshot(collection(db, "content"), (snapshot) => {
+      const cnList: ContentItem[] = [];
+      snapshot.forEach(doc => {
+        cnList.push({ id: doc.id, ...doc.data() } as ContentItem);
+      });
+      setLiveContent(cnList);
+    }, (err) => handleLiveSyncError(err, 'list', 'content'));
+
+    const u9 = onSnapshot(collection(db, "supportTickets"), (snapshot) => {
+      const tList: SupportTicket[] = [];
+      snapshot.forEach(doc => {
+        tList.push({ id: doc.id, ...doc.data() } as SupportTicket);
+      });
+      setLiveTickets(tList);
+    }, (err) => handleLiveSyncError(err, 'list', 'supportTickets'));
+
+    const u10 = onSnapshot(collection(db, "activities"), (snapshot) => {
+      const actList: DashboardActivity[] = [];
+      snapshot.forEach(doc => {
+        actList.push({ id: doc.id, ...doc.data() } as DashboardActivity);
+      });
+      setLiveActivities(actList);
+    }, (err) => handleLiveSyncError(err, 'list', 'activities'));
+
+    const u11 = onSnapshot(doc(db, "settings", "global_workspace"), (doc) => {
+      if (doc.exists()) {
+        setLiveSettings(doc.data() as WorkspaceSettings);
+      }
+    }, (err) => handleLiveSyncError(err, 'get', 'settings/global_workspace'));
+
+    return () => {
+      if (typeof u1 === 'function') u1();
+      if (typeof u2 === 'function') u2();
+      if (typeof u3 === 'function') u3();
+      if (typeof u4 === 'function') u4();
+      if (typeof u5 === 'function') u5();
+      if (typeof u6 === 'function') u6();
+      if (typeof u7 === 'function') u7();
+      if (typeof u8 === 'function') u8();
+      if (typeof u9 === 'function') u9();
+      if (typeof u10 === 'function') u10();
+      if (typeof u11 === 'function') u11();
+    };
+  }, [adminUser]);
+
+  // Error handling compliance mapper
+  function handleLiveSyncError(error: unknown, opType: string, path: string) {
+    const errObj = {
+      error: error instanceof Error ? error.message : String(error),
+      auth: {
+        uid: auth.currentUser?.uid,
+        email: auth.currentUser?.email
+      },
+      operationType: opType,
+      path: path
+    };
+    console.error("Firestore sync error: ", JSON.stringify(errObj));
+  }
+
+  // Live Actions mapped directly to Firestore writes
+  const handleClearActivities = async () => {
+    try {
+      for (const act of liveActivities) {
+        await deleteDoc(doc(db, "activities", act.id));
+      }
+      showToastMsg("Cleared historical audit logs.");
+    } catch (e) {
+      handleLiveSyncError(e, 'delete', 'activities');
+    }
+  };
+
+  const handleUpdateFarmerRole = async (id: string, role: string) => {
+    try {
+      await updateDoc(doc(db, "users", id), { role });
+      showToastMsg(`Role assigned successfully: ${role}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `users/${id}`);
+    }
+  };
+
+  const handleUpdateFarmerStatus = async (id: string, status: 'Active' | 'Suspended') => {
+    try {
+      await updateDoc(doc(db, "users", id), { status });
+      showToastMsg(`Grower login state switched to: ${status}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `users/${id}`);
+    }
+  };
+
+  const handleReviewSoilReport = async (id: string, action: string) => {
+    try {
+      await updateDoc(doc(db, "soilReports", id), {
+        status: "Reviewed",
+        actionTaken: action
+      });
+      showToastMsg("Manual diagnosis review committed to database.");
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `soilReports/${id}`);
+    }
+  };
+
+  const handleUploadSoilReport = async (report: any) => {
+    try {
+      const newId = `REP-${Math.floor(1000 + Math.random() * 9000)}`;
+      const payload = {
+        id: newId,
+        ...report,
+        status: "Pending",
+        actionTaken: "",
+        uploadDate: new Date().toISOString().split('T')[0]
+      };
+      await setDoc(doc(db, "soilReports", newId), payload);
+      showToastMsg(`Successfully registered Soil Analysis report ${newId}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'soilReports');
+    }
+  };
+
+  const handleAddAlertRule = async (rule: any) => {
+    try {
+      const newId = `RULE-${Date.now()}`;
+      await setDoc(doc(db, "deficiencyRules", newId), { id: newId, ...rule });
+      showToastMsg("Biochemical deficiency warning rule saved.");
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'deficiencyRules');
+    }
+  };
+
+  const handleToggleAlertRule = async (id: string, active: boolean) => {
+    try {
+      await updateDoc(doc(db, "deficiencyRules", id), { active });
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `deficiencyRules/${id}`);
+    }
+  };
+
+  const handleDeleteAlertRule = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "deficiencyRules", id));
+      showToastMsg("Custom threshold warning rule removed.");
+    } catch (e) {
+      handleLiveSyncError(e, 'delete', `deficiencyRules/${id}`);
+    }
+  };
+
+  const handleAddPlan = async (plan: any) => {
+    try {
+      const newId = `PLAN-${Date.now()}`;
+      await setDoc(doc(db, "nutritionPlans", newId), { id: newId, ...plan });
+      showToastMsg("Botanical formulation template successfully logged.");
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'nutritionPlans');
+    }
+  };
+
+  const handleDeletePlan = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "nutritionPlans", id));
+      showToastMsg("Formulation plan template deleted.");
+    } catch (e) {
+      handleLiveSyncError(e, 'delete', `nutritionPlans/${id}`);
+    }
+  };
+
+  const handleAddProductAdmin = async (prod: any) => {
+    try {
+      const newId = `prod_new_${Date.now()}`;
+      await setDoc(doc(db, "products", newId), { id: newId, ...prod });
+      showToastMsg(`New catalog product "${prod.name}" successfully registered.`);
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'products');
+    }
+  };
+
+  const handleEditProductStock = async (id: string, newStock: number) => {
+    try {
+      await updateDoc(doc(db, "products", id), { stock: Number(newStock) });
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `products/${id}`);
+    }
+  };
+
+  const handleDeleteProductAdmin = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "products", id));
+      showToastMsg("Catalog product removed from inventory registry.");
+    } catch (e) {
+      handleLiveSyncError(e, 'delete', `products/${id}`);
+    }
+  };
+
+  const handleUpdateOrderStatusAdmin = async (id: string, nextStatus: any) => {
+    try {
+      await updateDoc(doc(db, "orders", id), { status: nextStatus });
+      showToastMsg(`Advanced order process to: ${nextStatus}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `orders/${id}`);
+    }
+  };
+
+  const handleAddConsultation = async (consult: any) => {
+    try {
+      const newId = `CON-${Math.floor(1000 + Math.random() * 9000)}`;
+      await setDoc(doc(db, "consultations", newId), { id: newId, ...consult });
+      showToastMsg("Fitted advisor slot successfully booked.");
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'consultations');
+    }
+  };
+
+  const handleCompleteConsultation = async (id: string, notes: string) => {
+    try {
+      await updateDoc(doc(db, "consultations", id), {
+        notes,
+        status: "Completed"
+      });
+      showToastMsg("Session marked Completed; advisory records committed.");
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `consultations/${id}`);
+    }
+  };
+
+  const handlePublishArticle = async (article: any) => {
+    try {
+      const newId = `ART-${Date.now()}`;
+      const payload = {
+        id: newId,
+        ...article,
+        publishedAt: new Date().toISOString(),
+        targetPushSent: false
+      };
+      await setDoc(doc(db, "content", newId), payload);
+      showToastMsg(`Broadcasted article: ${article.title}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'create', 'content');
+    }
+  };
+
+  const handleTriggerSMSPush = async (id: string) => {
+    try {
+      await updateDoc(doc(db, "content", id), { targetPushSent: true });
+      showToastMsg("Push notification payload transmitted via cellular gateway.");
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `content/${id}`);
+    }
+  };
+
+  const handleDeleteArticle = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, "content", id));
+      showToastMsg("Scientific report deleted.");
+    } catch (e) {
+      handleLiveSyncError(e, 'delete', `content/${id}`);
+    }
+  };
+
+  const handleAddTicketMessage = async (ticketId: string, text: string, isInternal: boolean) => {
+    try {
+      const tRef = doc(db, "supportTickets", ticketId);
+      const tSnap = await getDoc(tRef);
+      if (tSnap.exists()) {
+        const ticketData = tSnap.data() as SupportTicket;
+        const msg = {
+          id: "msg-" + Date.now(),
+          sender: isInternal ? "STAFF NOTE" : "Agronomist Operator",
+          text: text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isInternal: isInternal
+        };
+        const updatedMsgs = [...ticketData.messages, msg];
+        await updateDoc(tRef, { messages: updatedMsgs });
+        showToastMsg("Grower helpdesk chat dispatched.");
+      }
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `supportTickets/${ticketId}`);
+    }
+  };
+
+  const handleUpdateTicketStatus = async (id: string, status: any) => {
+    try {
+      await updateDoc(doc(db, "supportTickets", id), { status });
+      showToastMsg(`Helpdesk ticket marked: ${status}`);
+    } catch (e) {
+      handleLiveSyncError(e, 'update', `supportTickets/${id}`);
+    }
+  };
+
+  const handleSaveSettings = async (setts: any) => {
+    try {
+      await setDoc(doc(db, "settings", "global_workspace"), setts);
+      showToastMsg("Saved application gateways and notification configs.");
+    } catch (e) {
+      handleLiveSyncError(e, 'write', 'settings/global_workspace');
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      if (user) {
+        let assignedRole: UserRole = 'Farmer';
+        if (user.email === 'abhayrana8272@gmail.com' || user.email?.endsWith('@agriic.com')) {
+          assignedRole = 'Super Admin';
+        } else {
+          assignedRole = 'Agronomist';
+        }
+        
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+        let finalAdm;
+        if (!userSnap.exists()) {
+          const freshUser = {
+            id: user.uid,
+            name: user.displayName || "Google Specialist",
+            email: user.email || "",
+            phone: user.phoneNumber || "+91 90000 00000",
+            role: assignedRole,
+            location: "India",
+            cropFocus: "Advisor Control",
+            landSize: "Staff",
+            status: "Active",
+            joinedAt: new Date().toISOString()
+          };
+          await setDoc(userRef, freshUser);
+          finalAdm = freshUser;
+        } else {
+          finalAdm = { id: user.uid, ...userSnap.data() };
+        }
+        
+        const session = {
+          email: finalAdm.email || '',
+          name: finalAdm.name || '',
+          role: finalAdm.role as UserRole,
+          uid: finalAdm.id
+        };
+        setAdminUser(session);
+        localStorage.setItem('agriic_admin_session', JSON.stringify(session));
+        showToastMsg(`Logged in successfully! Role: ${session.role}`);
+      }
+    } catch (error) {
+      console.error("Google authentication failed:", error);
+      showToastMsg("Google authentication pop-up was closed or failed.");
+    }
+  };
+
+  const handleDemoAdminLogin = (role: UserRole) => {
+    const demoSession = {
+      email: role === 'Super Admin' ? 'abhayrana8272@gmail.com' : 'ramesh.shinde@agriic.com',
+      name: role === 'Super Admin' ? 'Abhay Rana' : 'Dr. Ramesh Shinde',
+      role: role,
+      uid: role === 'Super Admin' ? 'AGR_DEMO_SUPER' : 'AGR_DEMO_STAFF'
+    };
+    setAdminUser(demoSession);
+    localStorage.setItem('agriic_admin_session', JSON.stringify(demoSession));
+    showToastMsg(`Sandbox Mode: Logged in as ${role}!`);
+  };
+
+  const handleAdminSignOut = async () => {
+    try {
+      await signOut(auth);
+      setAdminUser(null);
+      localStorage.removeItem('agriic_admin_session');
+      showToastMsg("Admin console session terminated safely.");
+    } catch {
+      setAdminUser(null);
+      localStorage.removeItem('agriic_admin_session');
+    }
+  };
   const [cart, setCart] = useState<{ product: Product; qty: number }[]>(() => {
     try {
       const saved = localStorage.getItem('agriic_cart');
@@ -86,7 +624,7 @@ export default function App() {
 
   // Auth Mode
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [currentUser, setCurrentUser] = useState<{ email: string; name?: string } | null>(() => {
+  const [currentUser, setCurrentUser] = useState<{ email: string; name?: string; phone?: string; location?: string; cropType?: string; landSize?: string } | null>(() => {
     try {
       const saved = localStorage.getItem('agriic_user');
       return saved ? JSON.parse(saved) : null;
@@ -94,6 +632,65 @@ export default function App() {
       return null;
     }
   });
+
+  // Auth Form State
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authLocation, setAuthLocation] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+
+  // Profile Edit State
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editCropType, setEditCropType] = useState('Vegetables & Herbs');
+  const [editLandSize, setEditLandSize] = useState('Backyard (5-10 Pots)');
+
+  // Profile Image State
+  const [profileImage, setProfileImage] = useState<string>(() => {
+    try {
+      return localStorage.getItem('agriic_profile_image') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  // Invoice Modal State
+  const [invoiceModalOrder, setInvoiceModalOrder] = useState<Order | null>(null);
+  const [invoiceEmailType, setInvoiceEmailType] = useState<'visual' | 'code'>('visual');
+  const [invoiceSending, setInvoiceSending] = useState(false);
+
+  // Checkout Form State
+  const [checkoutEmail, setCheckoutEmail] = useState('');
+  const [checkoutPhone, setCheckoutPhone] = useState('');
+  const [checkoutFullname, setCheckoutFullname] = useState('');
+  const [checkoutStreet, setCheckoutStreet] = useState('');
+  const [checkoutPincode, setCheckoutPincode] = useState('');
+  const [checkoutCity, setCheckoutCity] = useState('');
+  const [checkoutState, setCheckoutState] = useState('');
+
+  // Ref for picking file
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (currentUser) {
+      setEditName(currentUser.name || '');
+      setEditEmail(currentUser.email || '');
+      setEditPhone(currentUser.phone || '');
+      setEditLocation(currentUser.location || '');
+      setEditCropType(currentUser.cropType || 'Vegetables & Herbs');
+      setEditLandSize(currentUser.landSize || 'Backyard (5-10 Pots)');
+    } else {
+      setEditName('Alok Patel');
+      setEditEmail('alok.patel@agrimail.in');
+      setEditPhone('9845012345');
+      setEditLocation('Maharashtra');
+      setEditCropType('Vegetables & Herbs');
+      setEditLandSize('Backyard (5-10 Pots)');
+    }
+  }, [currentUser]);
 
   // Quiz State
   const [quizStep, setQuizStep] = useState(0);
@@ -122,6 +719,16 @@ export default function App() {
 
   // Parse hash and params
   const { path: routePath, params: routeParams } = getHashParams(hash);
+
+  // Sync profile details to checkout when entering checkout page
+  useEffect(() => {
+    if (routePath === '#checkout') {
+      setCheckoutEmail(currentUser?.email || editEmail || '');
+      setCheckoutPhone(currentUser?.phone || editPhone || '');
+      setCheckoutFullname(currentUser?.name || editName || '');
+      setCheckoutState(currentUser?.location || editLocation || '');
+    }
+  }, [routePath, currentUser, editEmail, editPhone, editName, editLocation]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -196,17 +803,37 @@ export default function App() {
   const handleAuthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (authMode === 'login') {
-      const mockUser = { email: 'farmer_user@agriic.com', name: 'Alok Patel' };
+      const emailVal = authEmail.trim() || 'farmer_user@agriic.com';
+      const nameVal = currentUser?.name || (emailVal.split('@')[0].toUpperCase()[0] + emailVal.split('@')[0].slice(1) || 'Alok Patel');
+      const mockUser = { 
+        email: emailVal, 
+        name: nameVal,
+        phone: currentUser?.phone || '9845012345',
+        location: currentUser?.location || 'Maharashtra',
+        cropType: currentUser?.cropType || 'Vegetables & Herbs',
+        landSize: currentUser?.landSize || 'Backyard (5-10 Pots)'
+      };
       localStorage.setItem('agriic_user', JSON.stringify(mockUser));
       setCurrentUser(mockUser);
       showToastMsg('Welcome back to Agriic.!');
     } else {
-      const mockUser = { email: 'farmer_user@agriic.com', name: 'Alok Patel' };
+      const nameVal = authName.trim() || 'Alok Patel';
+      const emailVal = authEmail.trim() || 'farmer_user@agriic.com';
+      const locVal = authLocation.trim() || 'Maharashtra';
+      const phoneVal = authPhone.trim() || '9845012345';
+      const mockUser = { 
+        email: emailVal, 
+        name: nameVal, 
+        phone: phoneVal,
+        location: locVal,
+        cropType: 'Vegetables & Herbs',
+        landSize: 'Backyard (5-10 Pots)'
+      };
       localStorage.setItem('agriic_user', JSON.stringify(mockUser));
       setCurrentUser(mockUser);
       showToastMsg('Account created successfully!');
     }
-    window.location.hash = '#products';
+    window.location.hash = '#profile';
   };
 
   const handleLogout = () => {
@@ -216,6 +843,134 @@ export default function App() {
     window.location.hash = '#home';
   };
 
+  const saveUserProfile = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updatedUser = {
+      email: editEmail.trim() || currentUser?.email || 'alok.patel@agrimail.in',
+      name: editName.trim() || currentUser?.name || 'Alok Patel',
+      phone: editPhone.trim() || currentUser?.phone || '9845012345',
+      location: editLocation.trim() || currentUser?.location || 'Maharashtra',
+      cropType: editCropType,
+      landSize: editLandSize
+    };
+    
+    // Save to state and local storage
+    localStorage.setItem('agriic_user', JSON.stringify(updatedUser));
+    setCurrentUser(updatedUser);
+    showToastMsg('Grower Profile updated and synchronized successfully!');
+  };
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        showToastMsg('Image is too large! Please choose an image smaller than 2MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result as string;
+        setProfileImage(base64String);
+        localStorage.setItem('agriic_profile_image', base64String);
+        showToastMsg('Profile avatar image loaded and saved inside grower cache!');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const generateEmailTemplate = (order: Order): string => {
+    const itemRows = order.items.map(item => `
+      <tr>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e1d7;">
+          <div style="display: flex; align-items: center;">
+            <img src="${item.img || 'https://images.unsplash.com/photo-1464226184884-fa280b87c399?auto=format&fit=crop&w=400&q=80'}" style="width: 40px; height: 40px; border-radius: 8px; margin-right: 12px; object-fit: cover;" />
+            <div>
+              <div style="font-weight: bold; color: #1b3322; font-size: 14px;">${item.name}</div>
+              <div style="color: #666; font-size: 11px;">ID: ${item.productId}</div>
+            </div>
+          </div>
+        </td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e1d7; text-align: center; color: #1b3322; font-weight: bold;">
+          ${item.qty}
+        </td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e1d7; text-align: right; color: #1b3322; font-family: monospace;">
+          ₹${item.price}
+        </td>
+        <td style="padding: 12px; border-bottom: 1px solid #e2e1d7; text-align: right; color: #1b3322; font-weight: bold; font-family: monospace;">
+          ₹${item.price * item.qty}
+        </td>
+      </tr>
+    `).join('');
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Your Agriic Order Invoice</title>
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #fcfbf7; margin: 0; padding: 20px; color: #333;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e1d7; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+    <div style="background-color: #1b3322; padding: 24px; text-align: center; border-bottom: 4px solid #c2dd74;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 2px;">Agriic<span style="color: #c2dd74;">.</span></h1>
+      <p style="color: #c2dd74; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; margin: 5px 0 0 0; font-weight: bold;">Order Purchase Receipt</p>
+    </div>
+    <div style="padding: 24px;">
+      <h2 style="color: #1b3322; margin-top: 0; font-size: 18px;">Grower Dispatch Invoice</h2>
+      <p style="color: #555; font-size: 13px; line-height: 1.5;">
+        Dear Grower, your organic order formulation has been processed. Here is the verified dynamic digital tax invoice showing active botanical dispatches.
+      </p>
+      <div style="background-color: #f7f6ee; border-radius: 8px; padding: 12px; margin: 20px 0; border-left: 4px solid #1b3322; font-size: 12px;">
+        <table style="width: 100%;">
+          <tr><td style="color: #666; padding: 2px 0;"><strong>Invoice ID:</strong></td><td style="color: #1b3322; text-align: right; font-weight: bold;">${order.id}</td></tr>
+          <tr><td style="color: #666; padding: 2px 0;"><strong>Issue Date:</strong></td><td style="color: #1b3322; text-align: right;">${order.date}</td></tr>
+          <tr><td style="color: #666; padding: 2px 0;"><strong>Shipping Destination:</strong></td><td style="color: #1b3322; text-align: right;">${order.address}</td></tr>
+          <tr><td style="color: #666; padding: 2px 0;"><strong>Billing Method:</strong></td><td style="color: #1b3322; text-align: right; text-transform: uppercase;">${order.paymentMethod}</td></tr>
+        </table>
+      </div>
+      <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 15px;">
+        <thead>
+          <tr style="background-color: #1b3322; color: #ffffff; text-align: left;">
+            <th style="padding: 8px;">Active Formulation</th>
+            <th style="padding: 8px; text-align: center;">Qty</th>
+            <th style="padding: 8px; text-align: right;">Rate</th>
+            <th style="padding: 8px; text-align: right;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemRows}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3" style="padding: 10px 8px 2px 8px; text-align: right; color: #666;">Shipping charges:</td>
+            <td style="padding: 10px 8px 2px 8px; text-align: right; color: #1b3322; font-weight: bold; font-family: monospace;">
+              ${order.total >= 499 ? '₹0 (Gratis)' : '₹49'}
+            </td>
+          </tr>
+          <tr>
+            <td colspan="3" style="padding: 2px 8px 10px 8px; text-align: right; color: #1b3322; font-size: 14px; font-weight: bold; border-top: 1px solid #1b3322;">Grand Total:</td>
+            <td style="padding: 2px 8px 10px 8px; text-align: right; color: #1b3322; font-size: 15px; font-weight: bold; font-family: monospace; border-top: 1px solid #1b3322;">
+              ₹${order.total}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="margin-top: 25px; text-align: center; border-top: 1px dashed #e2e1d7; padding-top: 15px;">
+        <p style="color: #1b3322; font-size: 11px; font-weight: bold; margin: 0;">90-DAY ROOT & SOIL BIOME HEALTH GUARANTEE</p>
+        <p style="color: #666; font-size: 10px; margin: 4px 0 0 0; line-height: 1.4;">
+          Your formulation has been packed and sealed under temperature control. Thank you for cultivating with Agriic.
+        </p>
+      </div>
+    </div>
+    <div style="background-color: #f7f6ee; padding: 15px; text-align: center; font-size: 10px; color: #888; border-top: 1px solid #e2e1d7;">
+      <p style="margin: 0;">© 2026 Agriic Solutions Private Limited.</p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+  };
+
   // Navigation Links array
   const navLinks = [
     { label: 'Home', href: '#home' },
@@ -223,8 +978,8 @@ export default function App() {
     { label: 'Products', href: '#products' },
     { label: 'Soil Test™', href: '#soil-test' },
     { label: 'Blog', href: '#blog' },
-    { label: 'About Us', href: '#about' },
-    { label: 'Contact', href: '#contact' }
+    { label: 'Contact', href: '#contact' },
+    { label: 'Admin Console', href: '#admin' }
   ];
 
   return (
@@ -1506,26 +2261,57 @@ export default function App() {
         {routePath === '#checkout' && (
           <div className="py-12 px-4 md:px-12 bg-white max-w-5xl mx-auto">
             {cart.length === 0 ? (
-              <div className="text-center py-16">
-                <h3 className="text-lg font-bold mb-2">Cart is empty</h3>
-                <a href="#products" className="btn-primary">Go to products</a>
+              <div className="text-center py-16 bg-[#f7f6ee] border border-gray-200 rounded-3xl p-6 max-w-md mx-auto">
+                <ShoppingCart className="w-12 h-12 text-[#2b3a30] mx-auto mb-4" />
+                <h3 className="text-lg font-black text-[#1b3322] mb-1">Cart is empty</h3>
+                <p className="text-xs text-gray-500 mb-6">Explore our diagnostic mixtures to start crop recovery.</p>
+                <a href="#products" className="btn-primary inline-block">Browse Shop Products</a>
               </div>
             ) : (
               <div>
-                <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mb-8">Secure Checkout</h1>
+                <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mb-2">Secure Checkout</h1>
+                <p className="text-xs text-gray-400 mb-6 font-normal">Complete your organic soil biome restoration order parameters.</p>
+
+                {/* AUTOFILL HELPER BANNER */}
+                <div className="bg-[#f7f6ee] border border-dashed border-[#1b3322]/30 p-4 rounded-2xl mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start space-x-3">
+                    <span className="text-xl">⚡</span>
+                    <div>
+                      <h4 className="text-xs font-black text-[#1b3322] uppercase tracking-wide">Grower Profile Auto-fill</h4>
+                      <p className="text-[11px] text-gray-500 leading-normal mt-0.5 font-normal">
+                        {currentUser ? `Speed up dispatch with registered profile details: Name: "${currentUser.name || 'Alok'}", Phone: "${currentUser.phone || 'N/A'}", State: "${currentUser.location || 'N/A'}"` : 'Please register or log in to automatically load your location and phone metrics!'}
+                      </p>
+                    </div>
+                  </div>
+                  {currentUser && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCheckoutEmail(currentUser.email || '');
+                        setCheckoutPhone(currentUser.phone || '');
+                        setCheckoutFullname(currentUser.name || '');
+                        setCheckoutState(currentUser.location || '');
+                        showToastMsg('⚡ Successfully pre-loaded Address and Phone from Grower Profile!');
+                      }}
+                      className="bg-[#1b3322] hover:bg-black text-[#c2dd74] hover:text-white px-4 py-2 rounded-xl text-xs font-extrabold uppercase transition whitespace-nowrap cursor-pointer shadow-sm"
+                    >
+                      Fill Profile Details
+                    </button>
+                  )}
+                </div>
                 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   {/* Left Side forms */}
                   <form 
                     onSubmit={(e) => {
                       e.preventDefault();
-                      const formData = new FormData(e.currentTarget);
-                      const email = formData.get('email') as string || 'farmer@agriic.com';
-                      const fullname = formData.get('fullname') as string || 'Alok Patel';
-                      const street = formData.get('street') as string || '';
-                      const pincode = formData.get('pincode') as string || '';
-                      const city = formData.get('city') as string || '';
-                      const state = formData.get('state') as string || '';
+                      
+                      const email = checkoutEmail || 'farmer@agriic.com';
+                      const fullname = checkoutFullname || 'Alok Patel';
+                      const street = checkoutStreet || '';
+                      const pincode = checkoutPincode || '';
+                      const city = checkoutCity || '';
+                      const state = checkoutState || '';
 
                       const newOrder: Order = {
                         id: `AGR-${Math.floor(10000 + Math.random() * 90000)}`,
@@ -1560,11 +2346,27 @@ export default function App() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="text-[11px] font-bold text-gray-500 block mb-1">Email</label>
-                          <input name="email" type="email" placeholder="farmer@agriic.com" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                          <input 
+                            name="email" 
+                            type="email" 
+                            value={checkoutEmail}
+                            onChange={e => setCheckoutEmail(e.target.value)}
+                            placeholder="farmer@agriic.com" 
+                            className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                            required 
+                          />
                         </div>
                         <div>
                           <label className="text-[11px] font-bold text-gray-500 block mb-1">Mobile Phone</label>
-                          <input name="phone" type="tel" placeholder="+91" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                          <input 
+                            name="phone" 
+                            type="tel" 
+                            value={checkoutPhone}
+                            onChange={e => setCheckoutPhone(e.target.value)}
+                            placeholder="+91" 
+                            className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                            required 
+                          />
                         </div>
                       </div>
                     </div>
@@ -1574,24 +2376,64 @@ export default function App() {
                       <h3 className="font-extrabold text-slate-900 text-sm border-b pb-2 mb-2">Shipping Destination</h3>
                       <div>
                         <label className="text-[11px] font-bold text-gray-500 block mb-1">Complete Full Name</label>
-                        <input name="fullname" type="text" placeholder="Add name" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                        <input 
+                          name="fullname" 
+                          type="text" 
+                          value={checkoutFullname}
+                          onChange={e => setCheckoutFullname(e.target.value)}
+                          placeholder="Add name" 
+                          className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                          required 
+                        />
                       </div>
                       <div>
                         <label className="text-[11px] font-bold text-gray-500 block mb-1">Street Address</label>
-                        <input name="street" type="text" placeholder="Apartment, block, area details" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                        <input 
+                          name="street" 
+                          type="text" 
+                          value={checkoutStreet}
+                          onChange={e => setCheckoutStreet(e.target.value)}
+                          placeholder="Apartment, block, area details" 
+                          className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                          required 
+                        />
                       </div>
                       <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="text-[11px] font-bold text-gray-500 block mb-1">Pin Code</label>
-                          <input name="pincode" type="text" placeholder="400001" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                          <input 
+                            name="pincode" 
+                            type="text" 
+                            value={checkoutPincode}
+                            onChange={e => setCheckoutPincode(e.target.value)}
+                            placeholder="400001" 
+                            className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                            required 
+                          />
                         </div>
                         <div>
                           <label className="text-[11px] font-bold text-gray-500 block mb-1">City</label>
-                          <input name="city" type="text" placeholder="Mumbai" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                          <input 
+                            name="city" 
+                            type="text" 
+                            value={checkoutCity}
+                            onChange={e => setCheckoutCity(e.target.value)}
+                            placeholder="Mumbai" 
+                            className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                            required 
+                          />
                         </div>
                         <div>
                           <label className="text-[11px] font-bold text-gray-500 block mb-1">State</label>
-                          <input name="state" type="text" placeholder="Maharashtra" className="w-full border p-3 text-xs font-semibold rounded-xl" required />
+                          <input 
+                            name="state" 
+                            type="text" 
+                            value={checkoutState}
+                            onChange={e => setCheckoutState(e.target.value)}
+                            placeholder="Maharashtra" 
+                            className="w-full border p-3 text-xs font-semibold rounded-xl" 
+                            required 
+                          />
                         </div>
                       </div>
                     </div>
@@ -1711,18 +2553,63 @@ export default function App() {
 
               <form onSubmit={handleAuthSubmit} className="space-y-4">
                 {authMode === 'signup' && (
-                  <div>
-                    <label className="text-[11px] font-bold text-gray-750 block mb-1">Indian State / Location</label>
-                    <input type="text" placeholder="Enter State (e.g. Maharashtra)" className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" required />
-                  </div>
+                  <>
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-750 block mb-1">Full Name</label>
+                      <input 
+                        type="text" 
+                        value={authName} 
+                        onChange={e => setAuthName(e.target.value)} 
+                        placeholder="e.g. Alok Patel" 
+                        className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" 
+                        required 
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-750 block mb-1">Indian State / Location</label>
+                      <input 
+                        type="text" 
+                        value={authLocation} 
+                        onChange={e => setAuthLocation(e.target.value)} 
+                        placeholder="Enter State (e.g. Maharashtra)" 
+                        className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" 
+                        required 
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-gray-750 block mb-1">Phone / Whatsapp Number</label>
+                      <input 
+                        type="tel" 
+                        value={authPhone} 
+                        onChange={e => setAuthPhone(e.target.value)} 
+                        placeholder="e.g. 9845012345" 
+                        className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" 
+                        required 
+                      />
+                    </div>
+                  </>
                 )}
                 <div>
                   <label className="text-[11px] font-bold text-gray-750 block mb-1">Email address</label>
-                  <input type="email" placeholder="you@example.com" className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" required />
+                  <input 
+                    type="email" 
+                    value={authEmail} 
+                    onChange={e => setAuthEmail(e.target.value)} 
+                    placeholder="you@example.com" 
+                    className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" 
+                    required 
+                  />
                 </div>
                 <div>
-                  <label className="text-[11px] font-bold text-gray-750 block mb-1">Enter your Password</label>
-                  <input type="password" placeholder="••••••••" className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" required />
+                  <label className="text-[11px] font-bold text-gray-750 block mb-1 font-mono">Enter your Password</label>
+                  <input 
+                    type="password" 
+                    value={authPassword} 
+                    onChange={e => setAuthPassword(e.target.value)} 
+                    placeholder="••••••••" 
+                    className="w-full border bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none" 
+                    required 
+                  />
                 </div>
 
                 <button 
@@ -1754,33 +2641,398 @@ export default function App() {
           </div>
         )}
 
+        {/* VIEW 11.2: ADMIN DASHBOARD PLATFORM */}
+        {routePath === '#admin' && (
+          <div className="min-h-screen bg-[#F4F6F2] font-sans antialiased text-slate-800 flex flex-col md:flex-row animate-fade-in">
+            {/* If not authenticated as Admin, show login screen */}
+            {!adminUser ? (
+              <div className="flex-1 flex items-center justify-center py-20 px-4">
+                <div className="bg-white rounded-3xl p-8 border border-emerald-100 shadow-xl max-w-md w-full text-center space-y-6">
+                  <div>
+                    <span className="inline-flex p-3 rounded-2xl bg-emerald-50 text-[#3B6D11] mb-3">
+                      <Leaf className="w-8 h-8 animate-pulse" />
+                    </span>
+                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">Agriic Staff Hub</h2>
+                    <p className="text-gray-500 text-xs mt-1">Science-led plant nutrition and grower support cockpit</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <button
+                      onClick={handleGoogleSignIn}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-white hover:bg-slate-50 border border-gray-200 rounded-xl font-bold text-xs text-slate-700 transition cursor-pointer shadow-sm animate-bounce"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24">
+                        <path fill="#EA4335" d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.227-3.107C18.29 1.838 15.539 1 12.24 1 6.033 1 12.24s5.033 11.24 11.24 11.24c6.478 0 10.793-4.537 10.793-10.985 0-.74-.08-1.302-.176-1.71h-10.617z"/>
+                      </svg>
+                      <span>Sign In with Google Account</span>
+                    </button>
+                  </div>
+
+                  <div className="relative flex items-center justify-center py-1">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-150"></div>
+                    </div>
+                    <span className="relative px-3 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-widest">Sandbox Overrides</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-left">
+                    <button
+                      onClick={() => handleDemoAdminLogin('Super Admin')}
+                      className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-left transition cursor-pointer"
+                    >
+                      <strong className="text-[#3B6D11] text-[11px] font-black block">👑 Super Admin</strong>
+                      <span className="text-[9px] text-emerald-800 block mt-0.5 font-medium">Bypass OAuth & inspect full business metrics.</span>
+                    </button>
+                    <button
+                      onClick={() => handleDemoAdminLogin('Agronomist')}
+                      className="p-3 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl text-left transition cursor-pointer"
+                    >
+                      <strong className="text-[#0F6E56] text-[11px] font-black block">🔬 Staff Advisor</strong>
+                      <span className="text-[9px] text-teal-800 block mt-0.5 font-medium">Test custom role-based view constraints.</span>
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    Connecting to secure Cloud Firestore instance IDs: <br/>
+                    <strong className="font-mono text-slate-500">ai-studio-a19b472c-b3ef-4bd2-bee0-ad2edf9f388c</strong>
+                  </p>
+                </div>
+              </div>
+            ) : (
+              /* Administrative Dashboard Main Shell */
+              <div className="flex-1 flex flex-col md:flex-row min-h-screen">
+                {/* Left Sidebar Layout */}
+                <div className="w-full md:w-64 bg-[#112415] text-white shrink-0 flex flex-col border-r border-[#1e3d23] relative z-20">
+                  {/* Brand header */}
+                  <div className="p-5 border-b border-[#1e3d23] flex items-center gap-2 bg-[#0c1a0f]">
+                    <span className="p-1.5 rounded-lg bg-[#3B6D11] text-white">
+                      <Leaf className="w-4 h-4 text-agri-lime" />
+                    </span>
+                    <div>
+                      <h1 className="font-black text-xs uppercase tracking-widest text-[#c2dd74]">Agriic Admin</h1>
+                      <p className="text-[9px] text-emerald-600 font-mono">v1.2.0-secure</p>
+                    </div>
+                  </div>
+
+                  {/* Navigation Links: 10 Tabs */}
+                  <div className="flex-1 py-4 px-2 space-y-1 overflow-y-auto max-h-[85vh]">
+                    {[
+                      { id: 'home', label: 'Dashboard Home', icon: Globe },
+                      { id: 'farmers', label: 'Farmers Directory', icon: User },
+                      { id: 'soil', label: 'Soil & Crop Analysis', icon: Leaf },
+                      { id: 'nutrition', label: 'Nutrition Plans', icon: FileText },
+                      { id: 'products', label: 'Products & Kanban', icon: Package },
+                      { id: 'analytics', label: 'Analytics Insights', icon: Award },
+                      { id: 'consultations', label: 'Appointments', icon: Calendar },
+                      { id: 'content', label: 'Content CMS & SMS', icon: BookOpen },
+                      { id: 'support', label: 'Support Helpdesk', icon: HelpCircle },
+                      { id: 'settings', label: 'Workspace Settings', icon: ShieldCheck }
+                    ].map((tab) => {
+                      const IconComp = tab.icon;
+                      const isActive = adminActiveTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => setAdminActiveTab(tab.id)}
+                          className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-left text-xs font-black transition-all cursor-pointer ${
+                            isActive 
+                              ? 'bg-[#3B6D11] text-white shadow-md' 
+                              : 'text-emerald-100 hover:bg-emerald-950/40 hover:text-white'
+                          }`}
+                        >
+                          <IconComp className={`w-4 h-4 ${isActive ? 'text-agri-lime' : 'text-emerald-500'}`} />
+                          <span>{tab.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Footer User Badge & Role switch */}
+                  <div className="p-4 border-t border-[#1e3d23] bg-[#0c1a0f] space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-slate-200 border-2 border-emerald-900 overflow-hidden flex items-center justify-center text-slate-800 font-bold text-xs uppercase font-mono">
+                        {adminUser.name[0]}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <strong className="text-[11px] block text-slate-100 truncate">{adminUser.name}</strong>
+                        <span className="text-[9px] block text-agri-lime font-mono font-bold uppercase tracking-wider">{adminUser.role}</span>
+                      </div>
+                    </div>
+
+                    {/* Quick tester role switcher */}
+                    <div className="space-y-1.5 pt-2 border-t border-emerald-950">
+                      <label className="text-[8px] font-extrabold uppercase tracking-widest text-[#0F6E56] block font-mono">Access Role Toggle</label>
+                      <div className="grid grid-cols-2 gap-1 text-[9px]">
+                        <button
+                          onClick={() => handleDemoAdminLogin('Super Admin')}
+                          className={`px-1 py-1 rounded text-[8px] font-black uppercase text-center border cursor-pointer ${
+                            adminUser.role === 'Super Admin' 
+                              ? 'bg-[#3B6D11] border-[#3B6D11] text-white' 
+                              : 'bg-transparent border-emerald-900 text-emerald-300 hover:text-white'
+                          }`}
+                        >
+                          SuperAdmin
+                        </button>
+                        <button
+                          onClick={() => handleDemoAdminLogin('Agronomist')}
+                          className={`px-1 py-1 rounded text-[8px] font-black uppercase text-center border cursor-pointer ${
+                            adminUser.role === 'Agronomist' 
+                              ? 'bg-[#0F6E56] border-[#0F6E56] text-white' 
+                              : 'bg-transparent border-emerald-900 text-emerald-300 hover:text-white'
+                          }`}
+                        >
+                          Agronomist
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleAdminSignOut}
+                      className="w-full text-center py-2 bg-[#2d1c1a]/60 hover:bg-[#3f2220] text-red-300 hover:text-red-200 rounded-lg text-[9.5px] font-extrabold transition uppercase tracking-widest cursor-pointer mt-1"
+                    >
+                      Sign Out Hub
+                    </button>
+                  </div>
+                </div>
+
+                {/* Right panel, main content */}
+                <div className="flex-1 p-4 md:p-8 space-y-6 overflow-y-auto max-h-screen">
+                  {/* System connection header */}
+                  <div className="bg-white border-[0.5px] border-emerald-50 rounded-xl px-4 py-2 flex items-center justify-between text-[10px] text-gray-500 shadow-sm mt-1 sm:mt-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                      <span>Connected live to Google Firestore: <strong className="font-mono text-[#3B6D11]">gen-lang-client-0062152692</strong></span>
+                    </div>
+                    <span className="font-mono text-[9px] bg-slate-100 text-slate-800 font-bold px-2 py-0.5 rounded">
+                      Role Access level: {adminUser.role.toUpperCase()}
+                    </span>
+                  </div>
+
+                   {/* Modules Rendering router */}
+                  {adminActiveTab === 'home' && (
+                    <HomeModule 
+                      farmers={liveFarmers}
+                      soilReports={liveSoilReports}
+                      orders={liveOrders as any}
+                      alertRules={liveAlertRules}
+                      activities={liveActivities}
+                      onClearActivities={handleClearActivities}
+                      onNavigateToTab={(tabId) => setAdminActiveTab(tabId)}
+                    />
+                  )}
+
+                  {adminActiveTab === 'farmers' && (
+                    <FarmersModule 
+                      farmers={liveFarmers}
+                      onUpdateRole={handleUpdateFarmerRole}
+                      onUpdateStatus={handleUpdateFarmerStatus}
+                      onAddFarmer={async (farmer) => {
+                        try {
+                          const newId = `FARMER_${Math.floor(1000 + Math.random() * 9000)}`;
+                          const payload = {
+                            id: newId,
+                            ...farmer,
+                            joinedAt: new Date().toISOString()
+                          };
+                          await setDoc(doc(db, "users", newId), payload);
+                          showToastMsg(`Registered grower ${farmer.name} successfully.`);
+                        } catch (e) {
+                          handleLiveSyncError(e, 'create', 'users');
+                        }
+                      }}
+                    />
+                  )}
+
+                  {adminActiveTab === 'soil' && (
+                    <SoilModule 
+                      soilReports={liveSoilReports}
+                      alertRules={liveAlertRules}
+                      farmers={liveFarmers}
+                      onReviewReport={handleReviewSoilReport}
+                      onAddReport={handleUploadSoilReport}
+                      onAddAlertRule={handleAddAlertRule}
+                      onToggleAlertRule={handleToggleAlertRule}
+                      onDeleteAlertRule={handleDeleteAlertRule}
+                    />
+                  )}
+
+                  {adminActiveTab === 'nutrition' && (
+                    <NutritionModule 
+                      nutritionPlans={liveNutritionPlans}
+                      farmers={liveFarmers}
+                      onAddPlan={handleAddPlan}
+                    />
+                  )}
+
+                  {adminActiveTab === 'products' && (
+                    <ProductsModule 
+                      products={liveProducts as any}
+                      orders={liveOrders as any}
+                      onAddProduct={handleAddProductAdmin}
+                      onEditProductStock={handleEditProductStock}
+                      onDeleteProduct={handleDeleteProductAdmin}
+                      onUpdateOrderStatus={handleUpdateOrderStatusAdmin}
+                    />
+                  )}
+
+                  {adminActiveTab === 'analytics' && (
+                    adminUser.role === 'Super Admin' ? (
+                      <AnalyticsModule 
+                        orders={liveOrders as any}
+                        farmers={liveFarmers}
+                        soilReports={liveSoilReports}
+                      />
+                    ) : (
+                      <div className="bg-white border rounded-2xl p-12 text-center text-slate-500 max-w-lg mx-auto mt-10 shadow-sm animate-fade-in">
+                        <span className="text-4xl block mb-4">🔒</span>
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Analytics Restricted</h3>
+                        <p className="text-[10px] mt-1.5 leading-relaxed text-gray-500">Only users logged in with the <strong className="text-[#3B6D11]">Super Admin</strong> privilege are autorun to query business and gross revenues. Please use the sidebar's role toggle to elevate privilege levels.</p>
+                      </div>
+                    )
+                  )}
+
+                  {adminActiveTab === 'consultations' && (
+                    <ConsultationsModule 
+                      consultations={liveConsultations}
+                      farmers={liveFarmers}
+                      onAddConsultation={handleAddConsultation}
+                      onCompleteConsultation={handleCompleteConsultation}
+                    />
+                  )}
+
+                  {adminActiveTab === 'content' && (
+                    <ContentModule 
+                      contentItems={liveContent}
+                      onAddContent={handlePublishArticle}
+                      onDeleteContent={handleDeleteArticle}
+                      onSendSegmentalPush={async (segment, subj, msg) => {
+                        try {
+                          const actId = `ACT_SMS_${Date.now()}`;
+                          await setDoc(doc(db, "activities", actId), {
+                            id: actId,
+                            message: `⚡ SMS Broadcast: "${subj}" pushed to segment ${segment}`,
+                            type: 'content',
+                            time: 'just now'
+                          });
+                          showToastMsg(`SMS broadcast successfully scheduled to segment [${segment}]`);
+                        } catch (e) {
+                          handleLiveSyncError(e, 'create', 'activities');
+                        }
+                      }}
+                    />
+                  )}
+
+                  {adminActiveTab === 'support' && (
+                    <SupportModule 
+                      tickets={liveTickets}
+                      onAddTicketMessage={handleAddTicketMessage}
+                      onUpdateTicketStatus={handleUpdateTicketStatus}
+                    />
+                  )}
+
+                  {adminActiveTab === 'settings' && (
+                    adminUser.role === 'Super Admin' ? (
+                      <SettingsModule 
+                        farmers={liveFarmers}
+                        products={liveProducts as any}
+                        soilReports={liveSoilReports}
+                        brandingTitle={liveSettings?.primaryBrandName || "Agriic Science HQ"}
+                        onUpdateBranding={async (newTitle) => {
+                          try {
+                            const defaultSetts = {
+                              primaryBrandName: newTitle,
+                              primaryColor: "#3B6D11",
+                              secondaryColor: "#0F6E56",
+                              enableSMS: true,
+                              enablePayments: true,
+                              enableWeather: true,
+                              twoFactorEnabled: false
+                            };
+                            await setDoc(doc(db, "settings", "global_workspace"), defaultSetts);
+                            showToastMsg(`Successfully updated settings branding title to: "${newTitle}"`);
+                          } catch (e) {
+                            handleLiveSyncError(e, 'write', 'settings/global_workspace');
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="bg-white border rounded-2xl p-12 text-center text-slate-500 max-w-lg mx-auto mt-10 shadow-sm animate-fade-in">
+                        <span className="text-4xl block mb-4">🔒</span>
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Workspace Settings Restricted</h3>
+                        <p className="text-[10px] mt-1.5 leading-relaxed text-gray-500">Workspace settings and core system switches are restricted with ABAC permissions to <strong className="text-[#3B6D11]">Super Admin</strong>. Elevate role below to view or manage setting profiles.</p>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* VIEW 11.5: PROFILE & ORDERS TRACKING */}
         {routePath === '#profile' && (
-          <div className="py-12 px-4 md:px-8 lg:px-12 bg-white max-w-5xl mx-auto animate-fade-in text-slate-800">
+          <div className="py-12 px-4 md:px-8 lg:px-12 bg-white max-w-7xl mx-auto animate-fade-in text-slate-800">
             {/* Header info card */}
             <div className="bg-gradient-to-br from-[#2b3a30] to-[#1b251f] rounded-3xl p-6 md:p-8 text-white shadow-xl mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
               <div className="absolute -right-12 -bottom-12 w-64 h-64 rounded-full bg-white/5 blur-3xl pointer-events-none"></div>
               
-              <div className="flex items-center space-x-5 relative z-10">
-                <div className="w-16 h-16 rounded-full bg-[#c2dd74] text-[#1b3322] flex items-center justify-center font-black text-2xl border-4 border-white/10 shadow-md">
-                  {(currentUser?.name || 'Alok')[0].toUpperCase()}
+               <div className="flex items-center gap-3.5 sm:gap-5 relative z-10 min-w-0 flex-1">
+                {/* PROFILE AVATAR WITH PHOTO UPLOADER */}
+                <div className="relative group shrink-0">
+                  {profileImage ? (
+                    <img 
+                      src={profileImage} 
+                      className="w-14 h-14 sm:w-18 sm:h-18 rounded-full border-4 border-white/20 shadow-md object-cover transition-transform group-hover:scale-105 duration-200 bg-white" 
+                      alt="Grower Profile" 
+                    />
+                  ) : (
+                    <div className="w-14 h-14 sm:w-18 sm:h-18 rounded-full bg-[#c2dd74] text-[#1b3322] flex items-center justify-center font-black text-xl sm:text-2.5xl border-4 border-white/20 shadow-md uppercase">
+                      {(currentUser?.name || editName || 'Alok')[0]}
+                    </div>
+                  )}
+                  {/* Small trigger Camera Badge */}
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="absolute -right-0.5 -bottom-0.5 w-5 h-5 sm:w-6.5 sm:h-6.5 rounded-full bg-[#1b3322] border-2 border-white text-[#c2dd74] flex items-center justify-center hover:bg-[#c2dd74] hover:text-[#1b3322] transition-colors shadow-md cursor-pointer text-[10px] sm:text-xs"
+                    title="Change Profile Photo"
+                    type="button"
+                  >
+                    <Camera className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" />
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleAvatarChange} 
+                    className="hidden" 
+                    accept="image/*" 
+                  />
                 </div>
-                <div>
-                  <div className="flex items-center space-x-2.5">
-                    <h1 className="text-xl md:text-2xl font-black tracking-tight text-white">
-                      {currentUser?.name || 'Alok Patel'}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <h1 className="text-base sm:text-xl md:text-2xl font-black tracking-tight text-white leading-tight break-words">
+                      {currentUser?.name || editName || 'Alok Patel'}
                     </h1>
                     {!currentUser && (
-                      <span className="bg-amber-500/20 text-amber-300 text-[10px] uppercase font-black px-2 py-0.5 rounded border border-amber-500/30">
+                      <span className="bg-amber-500/20 text-amber-300 text-[8px] sm:text-[9.5px] uppercase font-black px-1.5 py-0.5 rounded border border-amber-500/30 whitespace-nowrap">
                         Demo Sandbox
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-white/70 mt-1">{currentUser?.email || 'alok.patel@agrimail.in'}</p>
-                  <p className="text-[11px] text-[#c2dd74]/90 font-medium mt-1 flex items-center space-x-1.5">
-                    <MapPin className="w-3 h-3 shrink-0" />
-                    <span>Registered Address: Maharashtra • Member since Jan 2026</span>
+                  <p className="text-[11px] sm:text-xs text-white/70 mt-1 break-all max-w-full truncate" title={currentUser?.email || editEmail || 'alok.patel@agrimail.in'}>
+                    {currentUser?.email || editEmail || 'alok.patel@agrimail.in'}
                   </p>
+                  <div className="text-[9.5px] sm:text-[11px] text-white/95 font-medium mt-2 flex flex-wrap gap-1.5 sm:gap-2">
+                    <span className="bg-white/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <MapPin className="w-2.5 h-2.5 text-[#c2dd74]" />
+                      <span>State: <strong className="font-bold text-white">{currentUser?.location || editLocation || 'Maharashtra'}</strong></span>
+                    </span>
+                    <span className="bg-white/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <span>Crop: <strong className="font-bold text-white">{currentUser?.cropType || editCropType || 'Vegetables & Herbs'}</strong></span>
+                    </span>
+                    <span className="bg-white/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <span>Scale: <strong className="font-bold text-white">{currentUser?.landSize || editLandSize || 'Backyard (5-10 Pots)'}</strong></span>
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1801,7 +3053,7 @@ export default function App() {
             </div>
 
             {/* Quick Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
               <div className="bg-[#f7f6ee] border border-[#e2e1d7] p-5 rounded-2xl">
                 <span className="text-[10px] text-gray-400 font-extrabold block uppercase tracking-wider">Total Purchases</span>
                 <span className="text-2xl font-extrabold text-[#2b3a30] block mt-1">{orders.length}</span>
@@ -1826,199 +3078,339 @@ export default function App() {
               </div>
             </div>
 
-            {/* Orders Section Head */}
-            <div className="border-b pb-4 mb-6 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-black text-slate-900 tracking-tight flex items-center space-x-2">
-                  <Package className="w-5 h-5 text-[#2b3a30] shrink-0" />
-                  <span>My Active & Historical Orders</span>
-                </h2>
-                <p className="text-xs text-gray-400 mt-1">Real-time dynamic transit checkpoints for formulation dispatch logs.</p>
-              </div>
-              <span className="text-[10px] font-bold text-[#c2dd74] bg-[#2b3a30] px-3 py-1.5 rounded-full uppercase tracking-wider">
-                Live Feed
-              </span>
-            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+              {/* EDITABLE FORM SIDEBAR */}
+              <div className="lg:col-span-5 bg-[#fcfbf7] border border-[#e2e1d7] rounded-3xl p-5 md:p-6 shadow-sm">
+                <div className="flex items-center space-x-2.5 mb-5 border-b pb-4 border-[#e2e1d7]">
+                  <div className="w-8 h-8 rounded-full bg-[#1b3322] flex items-center justify-center text-white shrink-0">
+                    <User className="w-4 h-4 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-[#1b3322] tracking-tight">Grower Profile Settings</h3>
+                    <p className="text-[10px] text-gray-400">Modify information metrics displayed in your agricultural logs.</p>
+                  </div>
+                </div>
 
-            {/* Orders Stack */}
-            {orders.length === 0 ? (
-              <div className="text-center py-16 border rounded-3xl bg-slate-50 border-dashed">
-                <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                <h3 className="text-base font-bold text-slate-800">No orders placed yet</h3>
-                <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Build your soil health list, add recipes to cart, and checkout to view active statuses here.</p>
-                <a href="#products" className="btn-primary inline-block mt-4 text-xs font-black uppercase">Browse Shop</a>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {orders.map((order) => {
-                  return (
-                    <div key={order.id} className="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm hover:shadow-md transition duration-200">
-                      
-                      {/* Top Order Row */}
-                      <div className="bg-slate-50/80 px-5 py-4 border-b border-gray-150 flex flex-wrap justify-between items-center gap-3">
-                        <div className="flex items-center space-x-3.5">
-                          <div>
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">ID</span>
-                            <span className="font-extrabold text-sm text-slate-800">{order.id}</span>
-                          </div>
-                          <div className="h-6 w-px bg-slate-200"></div>
-                          <div>
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Ordered On</span>
-                            <span className="text-xs font-bold text-slate-700">{order.date}</span>
-                          </div>
-                          <div className="h-6 w-px bg-slate-200"></div>
-                          <div>
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Invoice Amount</span>
-                            <span className="text-xs font-extrabold text-slate-800">₹ {order.total}</span>
-                          </div>
-                        </div>
+                <form onSubmit={saveUserProfile} className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Grower Full Name</label>
+                    <input 
+                      type="text" 
+                      value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      placeholder="e.g. Alok Patel" 
+                      className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none focus:ring-1 focus:ring-agri-lime" 
+                      required 
+                    />
+                  </div>
 
-                        <div className="flex items-center gap-2">
-                          <button 
-                            title="Simulate step transitions"
-                            onClick={() => {
-                              const nextStatusMap: Record<string, 'Processing' | 'In-Transit' | 'Delivered'> = {
-                                'Processing': 'In-Transit',
-                                'In-Transit': 'Delivered',
-                                'Delivered': 'Processing'
-                              };
-                              const nextStatus = nextStatusMap[order.status];
-                              setOrders(orders.map(o => o.id === order.id ? { ...o, status: nextStatus } : o));
-                              showToastMsg(`Demo order status upgraded to: ${nextStatus}`);
-                            }}
-                            className="text-[10px] bg-white hover:bg-slate-100 text-slate-800 font-bold px-2.5 py-1.5 rounded-lg border border-gray-200 transition shrink-0 flex items-center space-x-1 shadow-sm"
-                          >
-                            <span>🔄 Upgrade Status</span>
-                          </button>
-                        </div>
-                      </div>
+                  <div>
+                    <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Email Address</label>
+                    <input 
+                      type="email" 
+                      value={editEmail}
+                      onChange={e => setEditEmail(e.target.value)}
+                      placeholder="you@example.com" 
+                      className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none focus:ring-1 focus:ring-agri-lime" 
+                      required 
+                    />
+                  </div>
 
-                      <div className="p-5 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        {/* Status tracker steps */}
-                        <div className="lg:col-span-7 border-b lg:border-b-0 lg:border-r border-gray-150 pb-6 lg:pb-0 lg:pr-8 flex flex-col justify-center">
-                          <span className="text-[10px] font-bold text-gray-400 block mb-5 uppercase tracking-wider">Live Delivery Milestones</span>
-                          
-                          {/* Steps tracker UI */}
-                          <div className="relative flex items-center justify-between w-full px-4">
-                            
-                            {/* Connector bar background */}
-                            <div className="absolute top-4.5 left-8 right-8 h-1 bg-gray-200 -z-10 rounded-full" />
-                            
-                            {/* Connector bar active fill */}
-                            <div 
-                              className="absolute top-4.5 left-8 h-1 bg-[#2b3a30] -z-10 rounded-full transition-all duration-500" 
-                              style={{ 
-                                width: order.status === 'Processing' ? '0%' : order.status === 'In-Transit' ? '50%' : '100%' 
-                              }}
-                            />
+                  <div>
+                    <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Phone / WhatsApp Number</label>
+                    <input 
+                      type="tel" 
+                      value={editPhone}
+                      onChange={e => setEditPhone(e.target.value)}
+                      placeholder="e.g. 9845012345" 
+                      className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none focus:ring-1 focus:ring-agri-lime" 
+                      required 
+                    />
+                  </div>
 
-                            {/* Milestone 1 : Processing */}
-                            <div className="flex flex-col items-center">
-                              <div 
-                                className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                                  order.status === 'Processing'
-                                    ? 'bg-amber-50 border-amber-600 text-amber-700 font-bold ring-4 ring-amber-100 scale-105 shadow-md'
-                                    : 'bg-[#2b3a30] border-[#2b3a30] text-[#c2dd74]'
-                                }`}
-                              >
-                                <Clock className="w-4 h-4" />
-                              </div>
-                              <span className="text-[11px] font-bold mt-2 text-center text-slate-800">Processing</span>
-                              <span className="text-[9px] text-gray-400 mt-0.5">Scanned</span>
-                            </div>
+                  <div>
+                    <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Indian State / Location</label>
+                    <input 
+                      type="text" 
+                      value={editLocation}
+                      onChange={e => setEditLocation(e.target.value)}
+                      placeholder="e.g. Maharashtra" 
+                      className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none focus:ring-1 focus:ring-[#1b3322]" 
+                      required 
+                    />
+                  </div>
 
-                            {/* Milestone 2 : In-Transit */}
-                            <div className="flex flex-col items-center">
-                              <div 
-                                className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                                  order.status === 'In-Transit'
-                                    ? 'bg-amber-50 border-amber-600 text-amber-700 ring-4 ring-amber-100 scale-105 shadow-md'
-                                    : order.status === 'Delivered'
-                                      ? 'bg-[#2b3a30] border-[#2b3a30] text-[#c2dd74]'
-                                      : 'bg-white border-gray-200 text-gray-350'
-                                }`}
-                              >
-                                <Truck className="w-4.5 h-4.5" />
-                              </div>
-                              <span className={`text-[11px] font-bold mt-2 text-center ${
-                                order.status === 'Processing' ? 'text-gray-400' : 'text-slate-800'
-                              }`}>In Transit</span>
-                              <span className="text-[9px] text-gray-400 mt-0.5">Underway</span>
-                            </div>
-
-                            {/* Milestone 3 : Delivered */}
-                            <div className="flex flex-col items-center">
-                              <div 
-                                className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-                                  order.status === 'Delivered'
-                                    ? 'bg-emerald-50 border-emerald-600 text-emerald-800 font-bold ring-4 ring-emerald-100 scale-105 shadow-md'
-                                    : 'bg-white border-gray-200 text-gray-350'
-                                }`}
-                              >
-                                <CheckCircle className="w-4.5 h-4.5" />
-                              </div>
-                              <span className={`text-[11px] font-bold mt-2 text-center ${
-                                order.status !== 'Delivered' ? 'text-gray-400' : 'text-slate-800'
-                              }`}>Delivered</span>
-                              <span className="text-[9px] text-gray-400 mt-0.5">Arrived</span>
-                            </div>
-
-                          </div>
-
-                          {/* Extra status report banner */}
-                          <div className="mt-8 bg-[#f7f6ee]/80 p-4 rounded-xl border border-gray-150 flex items-start space-x-3 text-xs">
-                            <span className="text-base shrink-0 mt-0.5">
-                              {order.status === 'Processing' ? '⚙️' : order.status === 'In-Transit' ? '🚚' : '📦'}
-                            </span>
-                            <div>
-                              <p className="font-extrabold text-[#1b3322]">
-                                {order.status === 'Processing' && 'Formulation and raw-ingredient testing checks are active. Bagged and sealed.'}
-                                {order.status === 'In-Transit' && 'En-route past central transport corridors. Expected delivery in 32 Hours.'}
-                                {order.status === 'Delivered' && 'Checkpoints clear. Delivery verified successfully.'}
-                              </p>
-                              <p className="text-[11px] text-gray-400 mt-1 leading-normal">
-                                Ship destination: <strong className="text-gray-700 font-normal">{order.address}</strong>
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Order item lists */}
-                        <div className="lg:col-span-5 flex flex-col justify-between">
-                          <div>
-                            <span className="text-[10px] font-bold text-gray-400 block mb-3.5 uppercase tracking-wider">Itemized Breakdown</span>
-                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                              {order.items.map((item, idx) => (
-                                <div key={idx} className="flex justify-between items-center bg-slate-50 border border-gray-150 rounded-xl p-2.5">
-                                  <div className="flex items-center space-x-2.5 min-w-0">
-                                    <img src={item.img} className="w-8.5 h-8.5 object-cover rounded bg-white p-0.5 border shrink-0" alt="Order product" />
-                                    <div className="min-w-0">
-                                      <span className="text-xs font-bold text-slate-800 block truncate leading-tight">{item.name}</span>
-                                      <span className="text-[9px] font-semibold text-gray-400 mt-0.5 block">₹ {item.price} • qty {item.qty}</span>
-                                    </div>
-                                  </div>
-                                  <span className="text-xs font-bold text-slate-800 shrink-0">₹ {item.price * item.qty}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="mt-5 pt-3.5 border-t border-gray-150/80 flex justify-between items-center">
-                            <div className="flex items-center space-x-1.5 text-xs text-gray-400">
-                              <CreditCard className="w-4 h-4 text-slate-400" />
-                              <span className="capitalize font-bold text-slate-500">Method: {order.paymentMethod.toUpperCase()}</span>
-                            </div>
-                            <span className="text-[10px] text-gray-400 italic">Signature scan on record</span>
-                          </div>
-                        </div>
-
-                      </div>
-
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div>
+                      <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Crop focus</label>
+                      <select 
+                        value={editCropType}
+                        onChange={e => setEditCropType(e.target.value)}
+                        className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none"
+                      >
+                        <option value="Vegetables & Herbs">Vegetables & Herbs</option>
+                        <option value="Flowering & Roses">Flowering & Roses</option>
+                        <option value="Organic Farm crops">Organic Farm crops</option>
+                        <option value="Roof-Garden & Pots">Roof-Garden & Pots</option>
+                        <option value="Fruit Orchards">Fruit Orchards</option>
+                      </select>
                     </div>
-                  );
-                })}
+
+                    <div>
+                      <label className="text-[10px] font-black tracking-wider text-gray-500 uppercase block mb-1">Cultivation scale</label>
+                      <select 
+                        value={editLandSize}
+                        onChange={e => setEditLandSize(e.target.value)}
+                        className="w-full border border-gray-200 bg-white p-3 text-xs font-semibold rounded-xl focus:outline-none"
+                      >
+                        <option value="Backyard (1-5 Pots)">Backyard (1-5 Pots)</option>
+                        <option value="Terrace (5-20 Pots)">Terrace (5-20 Pots)</option>
+                        <option value="Small Farm (0.5-2 Acres)">Small Farm (0.5-2 Acres)</option>
+                        <option value="Medium (2-10 Acres)">Medium (2-10 Acres)</option>
+                        <option value="Commercial Land">Commercial Land</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    className="w-full bg-[#1b3322] hover:bg-black text-white hover:text-agri-lime font-extrabold text-xs py-3.5 rounded-xl transition-all shadow-md uppercase tracking-wider mt-2 flex items-center justify-center space-x-2 cursor-pointer"
+                  >
+                    <span>Save grower settings</span>
+                  </button>
+                </form>
+
+                <div className="mt-5 bg-[#c2dd74]/15 border border-[#c2dd74]/30 rounded-2xl p-4 text-[10px] text-gray-600 leading-normal">
+                  <span className="font-extrabold text-[#1b3322] block mb-1">🌱 Verified Diagnostics</span>
+                  All mineral evaluations, diagnostic Soil Test™ logs, and temperature-controlled crop dispatch routes are protected under soil cybersecurity protocols.
+                </div>
               </div>
-            )}
+
+              {/* ORDERS FEED LIST */}
+              <div className="lg:col-span-7 space-y-6">
+                {/* Orders Section Head */}
+                <div className="border-b pb-4 mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight flex items-center space-x-2">
+                      <Package className="w-5 h-5 text-[#2b3a30] shrink-0" />
+                      <span>My Active & Historical Orders</span>
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-1 font-normal">Real-time dynamic transit checkpoints for formulation dispatch logs.</p>
+                  </div>
+                  <span className="text-[10px] font-bold text-[#c2dd74] bg-[#2b3a30] px-3 py-1.5 rounded-full uppercase tracking-wider">
+                    Live Feed
+                  </span>
+                </div>
+
+                {/* Orders Stack */}
+                {orders.length === 0 ? (
+                  <div className="text-center py-16 border rounded-3xl bg-slate-50 border-dashed">
+                    <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                    <h3 className="text-base font-bold text-slate-800">No orders placed yet</h3>
+                    <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Build your soil health list, add recipes to cart, and checkout to view active statuses here.</p>
+                    <a href="#products" className="btn-primary inline-block mt-4 text-xs font-black uppercase">Browse Shop</a>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {orders.map((order) => {
+                      return (
+                        <div key={order.id} className="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm hover:shadow-md transition duration-200">
+                          
+                          {/* Top Order Row */}
+                          <div className="bg-slate-50/80 px-4 sm:px-5 py-4 border-b border-gray-150 flex flex-wrap justify-between items-center gap-4">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                              <div>
+                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">ID</span>
+                                <span className="font-extrabold text-xs sm:text-sm text-slate-800">#{order.id}</span>
+                              </div>
+                              <div className="hidden sm:block h-6 w-px bg-slate-200"></div>
+                              <div>
+                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Ordered On</span>
+                                <span className="text-xs font-bold text-slate-700">{order.date}</span>
+                              </div>
+                              <div className="hidden sm:block h-6 w-px bg-slate-200"></div>
+                              <div>
+                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Invoice Amount</span>
+                                <span className="text-xs font-extrabold text-slate-800 font-mono">₹{order.total}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button 
+                                title="Simulate step transitions"
+                                onClick={() => {
+                                  const nextStatusMap: Record<string, 'Processing' | 'In-Transit' | 'Delivered'> = {
+                                    'Processing': 'In-Transit',
+                                    'In-Transit': 'Delivered',
+                                    'Delivered': 'Processing'
+                                  };
+                                  const nextStatus = nextStatusMap[order.status];
+                                  setOrders(orders.map(o => o.id === order.id ? { ...o, status: nextStatus } : o));
+                                  showToastMsg(`Demo order status upgraded to: ${nextStatus}`);
+                                }}
+                                className="text-[10px] bg-white hover:bg-slate-100 text-slate-800 font-bold px-2.5 py-1.5 rounded-lg border border-gray-200 transition shrink-0 flex items-center space-x-1 shadow-sm cursor-pointer"
+                              >
+                                <span>🔄 Upgrade Status</span>
+                              </button>
+
+                              <button 
+                                type="button"
+                                title="Generate custom invoice template"
+                                onClick={() => {
+                                  setInvoiceModalOrder(order);
+                                  setInvoiceEmailType('visual');
+                                }}
+                                className="text-[10px] bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-extrabold px-2.5 py-1.5 rounded-lg border border-emerald-200/50 transition shrink-0 flex items-center space-x-1 shadow-sm cursor-pointer"
+                              >
+                                <Mail className="w-3 h-3 text-emerald-800" />
+                                <span>✉️ Send Invoice</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="p-4 sm:p-5 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8">
+                            {/* Status tracker steps */}
+                            <div className="lg:col-span-7 border-b lg:border-b-0 lg:border-r border-gray-150 pb-6 lg:pb-0 lg:pr-8 flex flex-col justify-center">
+                              <span className="text-[10px] font-bold text-gray-400 block mb-5 uppercase tracking-wider">Live Delivery Milestones</span>
+                              
+                              {/* Steps tracker UI */}
+                              <div className="relative flex items-center justify-between w-full px-2 sm:px-4">
+                                
+                                {/* Connector bar background */}
+                                <div className="absolute top-4.5 left-6 sm:left-8 right-6 sm:right-8 h-1 bg-gray-200 -z-10 rounded-full" />
+                                
+                                {/* Connector bar active fill */}
+                                <div 
+                                  className="absolute top-4.5 left-6 sm:left-8 h-1 bg-[#2b3a30] -z-10 rounded-full transition-all duration-500" 
+                                  style={{ 
+                                    width: order.status === 'Processing' ? '0%' : order.status === 'In-Transit' ? '50%' : '100%' 
+                                  }}
+                                />
+
+                                {/* Milestone 1 : Processing */}
+                                <div className="flex flex-col items-center">
+                                  <div 
+                                    className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                                      order.status === 'Processing'
+                                        ? 'bg-amber-50 border-amber-600 text-amber-700 font-bold ring-4 ring-amber-100 scale-105 shadow-md'
+                                        : 'bg-[#2b3a30] border-[#2b3a30] text-[#c2dd74]'
+                                    }`}
+                                  >
+                                    <Clock className="w-4 h-4" />
+                                  </div>
+                                  <span className="text-[10px] sm:text-[11px] font-bold mt-2 text-center text-slate-800">Processing</span>
+                                  <span className="text-[8px] sm:text-[9px] text-gray-400 mt-0.5">Scanned</span>
+                                </div>
+
+                                {/* Milestone 2 : In-Transit */}
+                                <div className="flex flex-col items-center">
+                                  <div 
+                                    className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                                      order.status === 'In-Transit'
+                                        ? 'bg-amber-50 border-amber-600 text-amber-700 ring-4 ring-amber-100 scale-105 shadow-md'
+                                        : order.status === 'Delivered'
+                                          ? 'bg-[#2b3a30] border-[#2b3a30] text-[#c2dd74]'
+                                          : 'bg-white border-gray-200 text-gray-350'
+                                    }`}
+                                  >
+                                    <Truck className="w-4.5 h-4.5" />
+                                  </div>
+                                  <span className={`text-[10px] sm:text-[11px] font-bold mt-2 text-center ${
+                                    order.status === 'Processing' ? 'text-gray-400' : 'text-slate-800'
+                                  }`}>In Transit</span>
+                                  <span className="text-[8px] sm:text-[9px] text-gray-400 mt-0.5">Underway</span>
+                                </div>
+
+                                {/* Milestone 3 : Delivered */}
+                                <div className="flex flex-col items-center">
+                                  <div 
+                                    className={`w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
+                                      order.status === 'Delivered'
+                                        ? 'bg-emerald-50 border-emerald-600 text-emerald-800 font-bold ring-4 ring-emerald-100 scale-105 shadow-md'
+                                        : 'bg-white border-gray-200 text-gray-350'
+                                    }`}
+                                  >
+                                    <CheckCircle className="w-4.5 h-4.5" />
+                                  </div>
+                                  <span className={`text-[10px] sm:text-[11px] font-bold mt-2 text-center ${
+                                    order.status !== 'Delivered' ? 'text-gray-400' : 'text-slate-800'
+                                  }`}>Delivered</span>
+                                  <span className="text-[8px] sm:text-[9px] text-gray-400 mt-0.5">Arrived</span>
+                                </div>
+
+                              </div>
+
+                              {/* Extra status report banner */}
+                              <div className="mt-8 bg-[#f7f6ee]/85 p-4 rounded-xl border border-gray-150 flex items-start space-x-3 text-xs leading-normal">
+                                <span className="text-base shrink-0 mt-0.5">
+                                  {order.status === 'Processing' ? '⚙️' : order.status === 'In-Transit' ? '🚚' : '📦'}
+                                </span>
+                                <div>
+                                  <p className="font-extrabold text-[#1b3322]">
+                                    {order.status === 'Processing' && 'Formulation and raw-ingredient testing checks are active. Bagged and sealed.'}
+                                    {order.status === 'In-Transit' && 'En-route past central transport corridors. Expected delivery in 32 Hours.'}
+                                    {order.status === 'Delivered' && 'Checkpoints clear. Delivery verified successfully.'}
+                                  </p>
+                                  <p className="text-[11px] text-gray-400 mt-1">
+                                    Ship destination: <strong className="text-gray-700 font-semibold">{order.address}</strong>
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Order item lists */}
+                            <div className="lg:col-span-5 flex flex-col justify-between">
+                              <div>
+                                <span className="text-[10px] font-extrabold text-gray-400 block mb-3 uppercase tracking-wider">Formulation Breakdown</span>
+                                <div className="space-y-3 max-h-68 overflow-y-auto pr-1">
+                                  {order.items.map((item, idx) => (
+                                    <div key={idx} className="bg-slate-50 border border-gray-150 rounded-xl p-3.5 space-y-2.5 transition hover:bg-slate-100/70">
+                                      <div className="flex items-start space-x-3.5 min-w-0">
+                                        <img src={item.img || 'https://images.unsplash.com/photo-1464226184884-fa280b87c399?auto=format&fit=crop&w=400&q=80'} className="w-11 h-11 object-cover rounded-lg bg-white p-0.5 border shrink-0 shadow-sm" alt={item.name} />
+                                        <div className="min-w-0 flex-1">
+                                          <span className="text-xs font-black text-slate-800 block truncate leading-snug">{item.name}</span>
+                                          <p className="text-[9px] text-gray-400 mt-0.5 font-mono">ID: {item.productId}</p>
+                                          <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                            <span className="bg-[#1b3322]/10 text-[#1b3322] text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase font-sans">
+                                              ₹{item.price}/bag
+                                            </span>
+                                            <span className="bg-amber-100 text-amber-900 text-[9px] font-black px-1.5 py-0.5 rounded uppercase font-sans">
+                                              {item.qty} dispatch bags
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="text-right">
+                                          <span className="text-xs font-extrabold text-slate-950 block font-mono">₹{item.price * item.qty}</span>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* GROWER QUANTITY SUMMARY FOOTPRINT */}
+                                      <div className="border-t border-dashed border-gray-200 pt-2 flex items-center justify-between text-[10px] text-gray-500 font-semibold gap-1">
+                                        <span>⚖️ Total Batch dispatch mass:</span>
+                                        <span className="text-slate-800 font-bold font-mono">
+                                          {(item.qty * 1.5).toFixed(1)} Kg Formulation
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="mt-5 pt-3.5 border-t border-gray-150/80 flex justify-between items-center text-xs">
+                                <span className="capitalize font-bold text-slate-500">Method: {order.paymentMethod.toUpperCase()}</span>
+                                <span className="text-[10px] text-gray-400 italic">Signature scan on record</span>
+                              </div>
+                            </div>
+
+                          </div>
+
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Quick reference block */}
             <div className="mt-12 bg-[#2b3a30] text-white p-6 rounded-3xl flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -2118,6 +3510,192 @@ export default function App() {
           <p className="text-white/45">Unit 101, B Wing, Off Link Road, Malad West, Mumbai, MH - 400064</p>
         </div>
       </footer>
+
+      {/* INVOICE MODAL SYSTEM */}
+      {invoiceModalOrder && (
+        <div className="fixed inset-0 bg-[#1b261f]/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" id="invoice-modal">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden border border-gray-150 flex flex-col my-8">
+            {/* Modal Header */}
+            <div className="bg-[#2b3a30] text-white p-5 flex justify-between items-center">
+              <div className="flex items-center space-x-2.5">
+                <span className="text-xl">🧾</span>
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-[#c2dd74]">Grower Order Invoice Dispatch</h3>
+                  <p className="text-[10px] text-white/70">Secure PDF Summary & Automation Template Panel</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setInvoiceModalOrder(null)}
+                className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all text-white text-sm font-bold cursor-pointer"
+                title="Dismiss View"
+                type="button"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Inner Tabs navigation */}
+            <div className="border-b border-gray-200 bg-slate-50 p-2 flex space-x-2">
+              <button
+                type="button"
+                onClick={() => setInvoiceEmailType('visual')}
+                className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl transition-all cursor-pointer text-center ${
+                  invoiceEmailType === 'visual'
+                    ? 'bg-white text-[#1b3322] shadow-sm ring-1 ring-black/5'
+                    : 'text-gray-500 hover:text-slate-800'
+                }`}
+              >
+                🖼️ Beautiful Visual Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setInvoiceEmailType('code')}
+                className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl transition-all cursor-pointer text-center ${
+                  invoiceEmailType === 'code'
+                    ? 'bg-white text-[#1b3322] shadow-sm ring-1 ring-black/5'
+                    : 'text-gray-500 hover:text-slate-800'
+                }`}
+              >
+                💻 Raw email HTML layout
+              </button>
+            </div>
+
+            {/* Tab content */}
+            <div className="p-6 overflow-y-auto max-h-[60vh] bg-slate-50/50">
+              {invoiceEmailType === 'visual' ? (
+                /* GORGEOUS DESIGN WITH DYNAMIC FIELDS */
+                <div className="bg-white p-6 rounded-2xl border border-gray-150 shadow-inner relative space-y-6">
+                  {/* Paid Watermark Banner */}
+                  <div className="absolute right-6 top-6 border-4 border-emerald-600/30 text-emerald-600 text-[11px] font-black uppercase px-2.5 py-1 rounded-lg transform rotate-12 scale-105 select-none pointer-events-none">
+                    🇮🇳 INVOICE PAID
+                  </div>
+
+                  {/* Header */}
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <Leaf className="w-5 h-5 text-emerald-700 fill-emerald-600" />
+                        <span className="font-black text-sm tracking-widest text-[#1b3322]">Agriic.</span>
+                      </div>
+                      <p className="text-[9px] text-gray-400 mt-1">Science-Led Botanical Nutrition Solutions</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] font-bold text-gray-400 block uppercase">Invoice ID</span>
+                      <span className="text-xs font-black text-slate-800 font-mono">#{invoiceModalOrder.id}</span>
+                    </div>
+                  </div>
+
+                  <hr className="border-gray-100" />
+
+                  {/* Metadata info */}
+                  <div className="grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <span className="text-[9px] font-bold text-gray-400 block uppercase">Grower Details</span>
+                      <strong className="text-slate-800 font-semibold block mt-0.5">{currentUser?.name || 'Registered Grower'}</strong>
+                      <span className="text-gray-500 text-[10px] block mt-0.5">Phone: {currentUser?.phone || 'Not Specified'}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] font-bold text-gray-400 block uppercase">Dispatch Details</span>
+                      <span className="text-slate-800 font-semibold block mt-0.5">Ordered On: {invoiceModalOrder.date}</span>
+                      <span className="text-gray-500 text-[10px] block mt-0.5">Method: {invoiceModalOrder.paymentMethod.toUpperCase()}</span>
+                    </div>
+                  </div>
+
+                  {/* Address */}
+                  <div className="bg-[#f7f6ee]/70 p-3 rounded-xl border border-yellow-200/40 text-xs">
+                    <span className="text-[9px] font-bold text-amber-900/60 uppercase block">Ship To Address</span>
+                    <p className="text-slate-700 font-semibold mt-1">{invoiceModalOrder.address}</p>
+                  </div>
+
+                  {/* Line itemized breakdown table */}
+                  <div>
+                    <span className="text-[9px] font-bold text-gray-400 block uppercase mb-2 font-display">Formulation Items</span>
+                    <div className="space-y-1.5">
+                      {invoiceModalOrder.items.map((item, idy) => (
+                        <div key={idy} className="flex justify-between items-center text-xs border-b border-gray-100 pb-1.5 pt-0.5">
+                          <div>
+                            <span className="font-extrabold text-slate-800 block">{item.name}</span>
+                            <span className="text-[10px] text-gray-400">Qty: {item.qty} bag(s) • Weight: {(item.qty * 1.5).toFixed(1)} Kg</span>
+                          </div>
+                          <span className="font-mono font-bold text-slate-800">₹{item.price * item.qty}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Fees footer summary */}
+                  <div className="border-t border-gray-100 pt-3 flex flex-col items-end text-xs space-y-1.5 text-right font-display">
+                    <div className="flex justify-between w-48 text-gray-500">
+                      <span>Itemized Subtotal:</span>
+                      <span className="font-mono">₹{invoiceModalOrder.total}</span>
+                    </div>
+                    <div className="flex justify-between w-48 text-[#1b3322] font-black text-sm border-t border-dashed border-gray-200 pt-1.5">
+                      <span>Grand Total:</span>
+                      <span className="font-mono text-slate-900">₹{invoiceModalOrder.total}</span>
+                    </div>
+                  </div>
+
+                  {/* Digital signatures */}
+                  <div className="border-t border-slate-100 pt-3 justify-between items-center flex text-[9px] text-gray-400">
+                    <span>AGRIIC SECURE RECEIPT PROMPT</span>
+                    <span className="italic font-mono">Authorized System stamp OK • 2026</span>
+                  </div>
+                </div>
+              ) : (
+                /* CODE GENERATOR SOURCE BLOCK FOR GROWERS WITH PRETTY COPY & DESCRIPTIONS */
+                <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 p-3.5 rounded-xl text-blue-800 text-[11px] leading-normal font-sans">
+                    💡 <strong>Grower system email template:</strong> This pristine responsive HTML template uses clean system styles and is pre-configured for dispatch via standard mail delivery agents.
+                  </div>
+                  <pre className="bg-slate-900 text-teal-400 p-4 rounded-xl text-[11px] font-mono overflow-auto max-h-72 select-all border border-slate-950/45">
+                    {generateEmailTemplate(invoiceModalOrder)}
+                  </pre>
+                  <p className="text-[10px] text-gray-400 text-right">💡 Double click the raw input text container to select all HTML code fast.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Action buttons footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t border-gray-150 flex flex-wrap justify-between items-center gap-3">
+              {/* Copy action */}
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(generateEmailTemplate(invoiceModalOrder));
+                  showToastMsg("Success! Professional HTML Invoice Code copied to clipboard!");
+                }}
+                className="bg-slate-250 text-slate-800 hover:bg-slate-350 text-[11px] font-black py-2 md:py-2.5 px-3.5 rounded-xl transition cursor-pointer"
+              >
+                📋 Copy HTML Source Code
+              </button>
+
+              <div className="flex space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    showToastMsg("Simulated invoice print spooling initiated.");
+                    window.print();
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-gray-200 text-slate-800 text-[11px] font-extrabold py-2 md:py-2.5 px-3 rounded-xl transition cursor-pointer"
+                >
+                  🖨️ Print Dispatch Receipt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    showToastMsg(`Email summary generated and successfully dispatched payload via simulated SMTP gateway to ${currentUser?.email || 'registered grower'}!`);
+                    setInvoiceModalOrder(null);
+                  }}
+                  className="bg-[#1b3322] hover:bg-[#2b3a30] text-[#c2dd74] text-[11px] font-black py-2 md:py-2.5 px-4 rounded-xl transition-all shadow-md cursor-pointer flex items-center space-x-1"
+                >
+                  <Mail className="w-3.5 h-3.5 mr-0.5 text-agri-lime" />
+                  <span>📬 Dispatch via Simulated SMTP</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

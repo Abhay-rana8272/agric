@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 @theme {
+  --color-primary-green: #3B6D11;
+  --color-secondary-teal: #0F6E56;
   --color-agri-dark: #2b3a30;
   --color-agri-deep: #1b3322;
   --color-agri-lime: #c2dd74;
